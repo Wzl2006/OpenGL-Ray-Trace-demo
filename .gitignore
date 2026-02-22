@@ -1,0 +1,7 @@
+build/
+.vs/
+*.user
+*.obj
+*.pdb
+*.ilk
+*.vcxproj.user
