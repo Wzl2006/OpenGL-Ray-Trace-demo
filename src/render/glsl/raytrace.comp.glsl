@@ -85,6 +85,30 @@ float randf() {
     return float(rand_pcg()) / 4294967295.0;
 }
 
+uint hash32(uint x) {
+    x ^= x >> 16u;
+    x *= 0x7feb352du;
+    x ^= x >> 15u;
+    x *= 0x846ca68bu;
+    x ^= x >> 16u;
+    return x;
+}
+
+float radicalInverseVdC(uint bits) {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAau) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10;
+}
+
+vec2 hammersley2D(uint i, uint n, uint scramble) {
+    float u = (float(i) + 0.5) / max(float(n), 1.0);
+    float v = radicalInverseVdC(i ^ scramble);
+    return vec2(u, v);
+}
+
 float saturate(float x) {
     return clamp(x, 0.0, 1.0);
 }
@@ -442,10 +466,11 @@ vec3 sampleDirectLightNEE(in Hit hit,
 
     vec3 result = vec3(0.0);
     vec3 diffuseBrdf = material.albedoRoughness.rgb * diffuseWeight * (1.0 / kPi);
+    vec2 shift = vec2(randf(), randf());
 
     for (int i = 0; i < sampleCount; ++i) {
-        // Add per-path jitter so light samples are not perfectly correlated across SPP within one workgroup.
-        vec2 uv = fract(sLightUv[i] + vec2(randf(), randf()));
+        // Use low-discrepancy base samples with one Cranley-Patterson shift per path.
+        vec2 uv = fract(sLightUv[i] + shift);
         vec3 lightPos = lightCenter + vec3((uv.x - 0.5) * sizeX, 0.0, (uv.y - 0.5) * sizeY);
         vec3 toLight = lightPos - hit.position;
         float dist2 = dot(toLight, toLight);
@@ -674,9 +699,9 @@ void main() {
     if (int(gl_LocalInvocationIndex) < lightSamples) {
         uvec3 group = gl_WorkGroupID;
         uint frame = uint(uCamera.viewportAndFrame.z);
-        uint seed = group.x * 73856093u ^ group.y * 19349663u ^ frame * 83492791u ^ gl_LocalInvocationIndex * 2654435761u;
-        rng_state = seed | 1u;
-        sLightUv[gl_LocalInvocationIndex] = vec2(randf(), randf());
+        uint li = gl_LocalInvocationIndex;
+        uint seed = group.x * 73856093u ^ group.y * 19349663u ^ frame * 83492791u ^ li * 2654435761u;
+        sLightUv[li] = hammersley2D(li, uint(lightSamples), hash32(seed));
     }
     barrier();
 
@@ -693,10 +718,14 @@ void main() {
 
     int spp = clamp(uParams.options.z, 1, 2048);
     uint frame = uint(uCamera.viewportAndFrame.z);
+    uint pixelSeed = hash32(uint(pixel.x) * 1973u ^ uint(pixel.y) * 9277u ^ frame * 26699u ^ 97u);
+    vec2 pixelShift = vec2(float(hash32(pixelSeed ^ 0x68bc21ebu)) / 4294967295.0,
+                           float(hash32(pixelSeed ^ 0x02e5be93u)) / 4294967295.0);
+    uint sppU = uint(spp);
     for (int sampleIndex = 0; sampleIndex < spp; ++sampleIndex) {
         rng_state = uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + frame * 26699u + uint(sampleIndex) * 104729u + 97u;
 
-        vec2 jitter = vec2(randf(), randf());
+        vec2 jitter = fract(hammersley2D(uint(sampleIndex), sppU, pixelSeed) + pixelShift);
         vec2 uv = (vec2(pixel) + jitter) / vec2(float(imageSizePx.x), float(imageSizePx.y));
         vec2 ndc = uv * 2.0 - 1.0;
 
