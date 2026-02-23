@@ -118,6 +118,34 @@ void Renderer::renderFrame() {
         return;
     }
 
+    auto pollGpuTimeQuery = [this]() {
+        const GLuint readQuery = m_timeQueries[static_cast<size_t>(m_queryReadIndex)];
+        GLuint queryAvailable = 0;
+        glGetQueryObjectuiv(readQuery, GL_QUERY_RESULT_AVAILABLE, &queryAvailable);
+        if (queryAvailable != 0u) {
+            GLuint64 elapsed = 0;
+            glGetQueryObjectui64v(readQuery, GL_QUERY_RESULT, &elapsed);
+            m_stats.gpuTimeMs = static_cast<double>(elapsed) / 1.0e6;
+            m_queryReadIndex = (m_queryReadIndex + 1) % static_cast<int>(m_timeQueries.size());
+        }
+    };
+
+    if (m_computeInFlight && m_computeFence != nullptr) {
+        const GLenum waitResult = glClientWaitSync(m_computeFence, 0, 0);
+        if (waitResult == GL_ALREADY_SIGNALED || waitResult == GL_CONDITION_SATISFIED) {
+            glDeleteSync(m_computeFence);
+            m_computeFence = nullptr;
+            m_computeInFlight = false;
+        }
+    }
+
+    pollGpuTimeQuery();
+    if (m_computeInFlight) {
+        m_stats.bvhRebuildPending = m_bvhRebuildPending;
+        m_stats.accumulatedFrameCount = m_frameSinceReset;
+        return;
+    }
+
     const bool fullUpload = (m_pendingDirty == SceneDirtyFlags::All);
     if (fullUpload) {
         uploadFullScene();
@@ -174,19 +202,15 @@ void Renderer::renderFrame() {
     glBeginQuery(GL_TIME_ELAPSED, query);
     glDispatchCompute((m_width + kLocalSize - 1) / kLocalSize, (m_height + kLocalSize - 1) / kLocalSize, 1);
     glEndQuery(GL_TIME_ELAPSED);
+    m_queryWriteIndex = (m_queryWriteIndex + 1) % static_cast<int>(m_timeQueries.size());
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
     runDenoiserIfEnabled();
-
-    const GLuint readQuery = m_timeQueries[static_cast<size_t>(m_queryReadIndex)];
-    GLuint queryAvailable = 0;
-    glGetQueryObjectuiv(readQuery, GL_QUERY_RESULT_AVAILABLE, &queryAvailable);
-    if (queryAvailable != 0u) {
-        GLuint64 elapsed = 0;
-        glGetQueryObjectui64v(readQuery, GL_QUERY_RESULT, &elapsed);
-        m_stats.gpuTimeMs = static_cast<double>(elapsed) / 1.0e6;
-        m_queryReadIndex = (m_queryReadIndex + 1) % static_cast<int>(m_timeQueries.size());
+    if (m_computeFence != nullptr) {
+        glDeleteSync(m_computeFence);
+        m_computeFence = nullptr;
     }
-    m_queryWriteIndex = (m_queryWriteIndex + 1) % static_cast<int>(m_timeQueries.size());
+    m_computeFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    m_computeInFlight = (m_computeFence != nullptr);
 
     glViewport(0, 0, m_width, m_height);
     glUseProgram(m_displayProgram);
@@ -895,6 +919,11 @@ void Renderer::releaseResources() {
         glDeleteQueries(static_cast<GLsizei>(m_timeQueries.size()), m_timeQueries.data());
         m_timeQueries.fill(0u);
     }
+    if (m_computeFence != nullptr) {
+        glDeleteSync(m_computeFence);
+        m_computeFence = nullptr;
+    }
+    m_computeInFlight = false;
 }
 
 } // namespace trace

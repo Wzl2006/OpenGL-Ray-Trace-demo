@@ -112,6 +112,8 @@ private:
     std::array<GLuint, 3> m_timeQueries = {};
     int m_queryWriteIndex = 0;
     int m_queryReadIndex = 0;
+    GLsync m_computeFence = nullptr;
+    bool m_computeInFlight = false;
 
     BvhBuilder m_bvhBuilder;
     BvhBuildOutput m_bvh;
