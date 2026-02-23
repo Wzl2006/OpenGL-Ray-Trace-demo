@@ -11,7 +11,8 @@ Realtime Cornell Box path tracing demo built with OpenGL 4.3 Compute Shader, Qt6
 - Schlick Fresnel, Cauchy dispersion (`A=1.5`, `B=0.004`, 6 bands).
 - NEE area-light sampling + BRDF importance sampling + MIS + Russian roulette.
 - Accumulation buffer (`GL_RGBA32F`) with dynamic reset and static alpha blending.
-- Built-in denoise pass (edge-aware bilateral using color/normal/albedo guides).
+- OIDN (OpenImageDenoise) CPU denoiser backend with color/normal/albedo guides.
+- Async denoise scheduling: denoise jobs are launched only after scene settles to avoid UI stalls.
 - Delayed high-quality rendering to avoid lockups at high SPP:
   - immediate low-SPP preview after edits,
   - then automatic recovery to higher quality.
@@ -24,7 +25,8 @@ Realtime Cornell Box path tracing demo built with OpenGL 4.3 Compute Shader, Qt6
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
   -DRT_QT6_ROOT="D:/Qt/6.9.3/msvc2022_64" `
-  -DRT_GLM_ROOT="D:/glm"
+  -DRT_GLM_ROOT="D:/glm" `
+  -DRT_OIDN_ROOT="D:/oidn-2.4.1.x64.windows"
 
 cmake --build build --config Debug --target trace
 ```
@@ -68,10 +70,11 @@ Output:
 The UI denoise toggle is wired to rendering logic:
 
 - If **off**:
-  - denoise compute pass is skipped,
+  - denoise job scheduling is skipped,
   - display uses raw `outputTexture`.
 - If **on**:
-  - denoise pass runs to `denoisedTexture`,
+  - OIDN denoise jobs run on CPU worker thread after scene settles,
+  - `beauty/output + normal + albedo` are captured from the same frame snapshot,
   - display uses `denoisedTexture`.
 
 ## Delayed Rendering Behavior
@@ -114,6 +117,6 @@ src/
 ## Known Limits
 
 - UI and rendering run on the same thread.
-- Built-in denoiser is lightweight (fast, not production-grade).
-- No external denoiser backend (OIDN/OptiX) integrated yet.
+- OIDN input still requires texture readback from OpenGL, so denoise cadence is throttled.
+- If OIDN is not found at configure time, renderer falls back to built-in compute denoiser.
 - No HDR output pipeline.

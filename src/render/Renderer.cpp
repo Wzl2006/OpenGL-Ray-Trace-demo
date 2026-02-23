@@ -25,6 +25,7 @@ constexpr int kSphereCount = 3;
 constexpr float kCauchyA = 1.5f;
 constexpr float kCauchyB = 0.004f;
 constexpr int kDispersionBands = 6;
+constexpr int kOidnKickIntervalMs = 120;
 
 } // namespace
 
@@ -57,6 +58,18 @@ void Renderer::initialize() {
 
     m_bvhRebuildPending = true;
     m_pendingDirty = SceneDirtyFlags::All;
+    m_denoiserBackend = DenoiserBackend::None;
+#if defined(TRACE_WITH_OIDN)
+    if (initializeOidn()) {
+        m_denoiserBackend = DenoiserBackend::OidnCpu;
+    } else if (m_denoiseProgram != 0u) {
+        m_denoiserBackend = DenoiserBackend::BuiltinCompute;
+    }
+#else
+    if (m_denoiseProgram != 0u) {
+        m_denoiserBackend = DenoiserBackend::BuiltinCompute;
+    }
+#endif
     m_initialized = true;
     m_fpsTimer.start();
     m_sceneIdleTimer.start();
@@ -78,6 +91,9 @@ void Renderer::shutdown() {
     if (!m_initialized) {
         return;
     }
+#if defined(TRACE_WITH_OIDN)
+    shutdownOidn();
+#endif
     releaseResources();
     m_initialized = false;
 }
@@ -129,7 +145,7 @@ void Renderer::renderFrame() {
         m_effectiveSppPerFrame = 1;
     }
     m_stats.effectiveSppPerFrame = m_effectiveSppPerFrame;
-    m_stats.denoiseEnabled = (m_params.denoiseEnabled != 0);
+    m_stats.denoiseEnabled = (m_params.denoiseEnabled != 0) && (m_denoiserBackend != DenoiserBackend::None);
 
     updateCameraBuffer();
     updateParamsBuffer();
@@ -177,7 +193,8 @@ void Renderer::renderFrame() {
     glUseProgram(m_displayProgram);
     glBindVertexArray(m_fullscreenVao);
     glActiveTexture(GL_TEXTURE0);
-    const bool showDenoised = (m_params.denoiseEnabled != 0) && (m_denoiseProgram != 0u);
+    const bool showDenoised = (m_params.denoiseEnabled != 0) &&
+                              (m_hasDenoisedFrame || m_denoiserBackend == DenoiserBackend::BuiltinCompute);
     glBindTexture(GL_TEXTURE_2D, showDenoised ? m_denoisedTexture : m_outputTexture);
     const GLint outputLocation = glGetUniformLocation(m_displayProgram, "uOutputTexture");
     glUniform1i(outputLocation, 0);
@@ -472,10 +489,58 @@ void Renderer::clearAccumulationTextures() {
     glBindTexture(GL_TEXTURE_2D, m_denoisedTexture);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, m_width, m_height, GL_RGBA, GL_FLOAT, zeros.data());
     glBindTexture(GL_TEXTURE_2D, 0);
+    m_hasDenoisedFrame = false;
+    ++m_resetSerial;
+#if defined(TRACE_WITH_OIDN)
+    {
+        std::scoped_lock<std::mutex> lock(m_oidnMutex);
+        m_oidnJobPending = false;
+        m_oidnResultReady = false;
+    }
+#endif
 }
 
 void Renderer::runDenoiserIfEnabled() {
-    if (m_params.denoiseEnabled == 0 || m_denoiseProgram == 0u) {
+    if (m_params.denoiseEnabled == 0) {
+        return;
+    }
+
+    if (m_denoiserBackend == DenoiserBackend::OidnCpu) {
+#if defined(TRACE_WITH_OIDN)
+        uploadOidnResultIfReady();
+
+        if (m_stats.isDynamic || m_frameSinceReset < 2u || !m_sceneIdleTimer.isValid()) {
+            return;
+        }
+
+        const qint64 nowMs = m_sceneIdleTimer.elapsed();
+        if ((nowMs - m_lastOidnKickMs) < kOidnKickIntervalMs) {
+            return;
+        }
+
+        {
+            std::scoped_lock<std::mutex> lock(m_oidnMutex);
+            if (m_oidnJobPending || m_oidnJobInFlight) {
+                return;
+            }
+        }
+
+        if (!captureOidnInput()) {
+            return;
+        }
+        enqueueOidnJob();
+        m_lastOidnKickMs = nowMs;
+#endif
+        return;
+    }
+
+    if (m_denoiserBackend == DenoiserBackend::BuiltinCompute) {
+        runBuiltinDenoiser();
+    }
+}
+
+void Renderer::runBuiltinDenoiser() {
+    if (m_denoiseProgram == 0u) {
         return;
     }
 
@@ -499,7 +564,200 @@ void Renderer::runDenoiserIfEnabled() {
 
     glDispatchCompute((m_width + kLocalSize - 1) / kLocalSize, (m_height + kLocalSize - 1) / kLocalSize, 1);
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+    m_hasDenoisedFrame = true;
 }
+
+#if defined(TRACE_WITH_OIDN)
+bool Renderer::initializeOidn() {
+    m_oidnDevice = oidn::newDevice(oidn::DeviceType::CPU);
+    if (!m_oidnDevice) {
+        qWarning() << "OIDN device creation failed.";
+        return false;
+    }
+
+    m_oidnDevice.commit();
+    const char* errorMessage = nullptr;
+    if (m_oidnDevice.getError(errorMessage) != oidn::Error::None) {
+        qWarning() << "OIDN device commit failed:" << (errorMessage != nullptr ? errorMessage : "unknown error");
+        m_oidnDevice.release();
+        return false;
+    }
+
+    m_oidnExitRequested = false;
+    m_oidnWorker = std::thread(&Renderer::oidnWorkerMain, this);
+    qInfo() << "OIDN CPU backend initialized.";
+    return true;
+}
+
+void Renderer::shutdownOidn() {
+    {
+        std::scoped_lock<std::mutex> lock(m_oidnMutex);
+        m_oidnExitRequested = true;
+        m_oidnJobPending = false;
+    }
+    m_oidnCv.notify_all();
+    if (m_oidnWorker.joinable()) {
+        m_oidnWorker.join();
+    }
+    m_oidnDevice.release();
+    m_oidnColorReadback.clear();
+    m_oidnNormalReadback.clear();
+    m_oidnAlbedoReadback.clear();
+    m_oidnUploadRgba.clear();
+}
+
+bool Renderer::captureOidnInput() {
+    const size_t pixelCount = static_cast<size_t>(m_width) * static_cast<size_t>(m_height);
+    if (pixelCount == 0u) {
+        return false;
+    }
+
+    const size_t rgbaCount = pixelCount * 4u;
+    m_oidnColorReadback.resize(rgbaCount);
+    m_oidnNormalReadback.resize(rgbaCount);
+    m_oidnAlbedoReadback.resize(rgbaCount);
+
+    glBindTexture(GL_TEXTURE_2D, m_outputTexture);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, m_oidnColorReadback.data());
+    glBindTexture(GL_TEXTURE_2D, m_normalTexture);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, m_oidnNormalReadback.data());
+    glBindTexture(GL_TEXTURE_2D, m_albedoTexture);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, m_oidnAlbedoReadback.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    OidnJob job;
+    job.width = m_width;
+    job.height = m_height;
+    job.resetSerial = m_resetSerial;
+    job.color.resize(pixelCount * 3u);
+    job.normal.resize(pixelCount * 3u);
+    job.albedo.resize(pixelCount * 3u);
+
+    for (size_t i = 0; i < pixelCount; ++i) {
+        const size_t rgbaBase = i * 4u;
+        const size_t rgbBase = i * 3u;
+
+        job.color[rgbBase + 0u] = m_oidnColorReadback[rgbaBase + 0u];
+        job.color[rgbBase + 1u] = m_oidnColorReadback[rgbaBase + 1u];
+        job.color[rgbBase + 2u] = m_oidnColorReadback[rgbaBase + 2u];
+
+        float nx = m_oidnNormalReadback[rgbaBase + 0u] * 2.0f - 1.0f;
+        float ny = m_oidnNormalReadback[rgbaBase + 1u] * 2.0f - 1.0f;
+        float nz = m_oidnNormalReadback[rgbaBase + 2u] * 2.0f - 1.0f;
+        const float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (len > 1e-6f) {
+            nx /= len;
+            ny /= len;
+            nz /= len;
+        } else {
+            nx = 0.0f;
+            ny = 1.0f;
+            nz = 0.0f;
+        }
+        job.normal[rgbBase + 0u] = nx;
+        job.normal[rgbBase + 1u] = ny;
+        job.normal[rgbBase + 2u] = nz;
+
+        job.albedo[rgbBase + 0u] = m_oidnAlbedoReadback[rgbaBase + 0u];
+        job.albedo[rgbBase + 1u] = m_oidnAlbedoReadback[rgbaBase + 1u];
+        job.albedo[rgbBase + 2u] = m_oidnAlbedoReadback[rgbaBase + 2u];
+    }
+
+    {
+        std::scoped_lock<std::mutex> lock(m_oidnMutex);
+        m_oidnPendingJob = std::move(job);
+        m_oidnJobPending = true;
+    }
+    return true;
+}
+
+void Renderer::enqueueOidnJob() {
+    m_oidnCv.notify_one();
+}
+
+void Renderer::uploadOidnResultIfReady() {
+    OidnResult result;
+    {
+        std::scoped_lock<std::mutex> lock(m_oidnMutex);
+        if (!m_oidnResultReady) {
+            return;
+        }
+        result = std::move(m_oidnResult);
+        m_oidnResultReady = false;
+    }
+
+    if (result.resetSerial != m_resetSerial || result.width != m_width || result.height != m_height || result.color.empty()) {
+        return;
+    }
+
+    const size_t pixelCount = static_cast<size_t>(result.width) * static_cast<size_t>(result.height);
+    m_oidnUploadRgba.resize(pixelCount * 4u);
+    for (size_t i = 0; i < pixelCount; ++i) {
+        const size_t rgbBase = i * 3u;
+        const size_t rgbaBase = i * 4u;
+        m_oidnUploadRgba[rgbaBase + 0u] = result.color[rgbBase + 0u];
+        m_oidnUploadRgba[rgbaBase + 1u] = result.color[rgbBase + 1u];
+        m_oidnUploadRgba[rgbaBase + 2u] = result.color[rgbBase + 2u];
+        m_oidnUploadRgba[rgbaBase + 3u] = 1.0f;
+    }
+
+    glBindTexture(GL_TEXTURE_2D, m_denoisedTexture);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, result.width, result.height, GL_RGBA, GL_FLOAT, m_oidnUploadRgba.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+    m_hasDenoisedFrame = true;
+}
+
+void Renderer::oidnWorkerMain() {
+    while (true) {
+        OidnJob job;
+        {
+            std::unique_lock<std::mutex> lock(m_oidnMutex);
+            m_oidnCv.wait(lock, [this]() { return m_oidnExitRequested || m_oidnJobPending; });
+            if (m_oidnExitRequested) {
+                break;
+            }
+            job = std::move(m_oidnPendingJob);
+            m_oidnJobPending = false;
+            m_oidnJobInFlight = true;
+        }
+
+        std::vector<float> denoised;
+        denoised.resize(job.color.size(), 0.0f);
+
+        bool success = false;
+        if (job.width > 0 && job.height > 0 && !job.color.empty() && !job.normal.empty() && !job.albedo.empty() && m_oidnDevice) {
+            oidn::FilterRef filter = m_oidnDevice.newFilter("RT");
+            filter.setImage("color", job.color.data(), oidn::Format::Float3, static_cast<size_t>(job.width), static_cast<size_t>(job.height));
+            filter.setImage("normal", job.normal.data(), oidn::Format::Float3, static_cast<size_t>(job.width), static_cast<size_t>(job.height));
+            filter.setImage("albedo", job.albedo.data(), oidn::Format::Float3, static_cast<size_t>(job.width), static_cast<size_t>(job.height));
+            filter.setImage("output", denoised.data(), oidn::Format::Float3, static_cast<size_t>(job.width), static_cast<size_t>(job.height));
+            filter.set("hdr", true);
+            filter.set("cleanAux", false);
+            filter.commit();
+            filter.execute();
+
+            const char* errorMessage = nullptr;
+            if (m_oidnDevice.getError(errorMessage) == oidn::Error::None) {
+                success = true;
+            } else {
+                qWarning() << "OIDN execute failed:" << (errorMessage != nullptr ? errorMessage : "unknown error");
+            }
+        }
+
+        {
+            std::scoped_lock<std::mutex> lock(m_oidnMutex);
+            if (success) {
+                m_oidnResult.width = job.width;
+                m_oidnResult.height = job.height;
+                m_oidnResult.resetSerial = job.resetSerial;
+                m_oidnResult.color = std::move(denoised);
+                m_oidnResultReady = true;
+            }
+            m_oidnJobInFlight = false;
+        }
+    }
+}
+#endif
 
 std::string Renderer::loadTextFile(const std::string& path) const {
     QFile file(QString::fromStdString(path));

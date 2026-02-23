@@ -1,12 +1,19 @@
 #pragma once
 
 #include <array>
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <QElapsedTimer>
 #include <QOpenGLFunctions_4_3_Core>
+
+#if defined(TRACE_WITH_OIDN)
+#include <OpenImageDenoise/oidn.hpp>
+#endif
 
 #include "scene/BvhBuilder.h"
 #include "scene/SceneData.h"
@@ -26,7 +33,9 @@ struct RenderStats {
 class Renderer : protected QOpenGLFunctions_4_3_Core {
 public:
     enum class DenoiserBackend {
-        None = 0
+        None = 0,
+        BuiltinCompute = 1,
+        OidnCpu = 2
     };
 
     Renderer();
@@ -52,10 +61,19 @@ private:
     void updateParamsBuffer();
     void clearAccumulationTextures();
     void runDenoiserIfEnabled();
+    void runBuiltinDenoiser();
     std::string loadTextFile(const std::string& path) const;
     GLuint compileShader(GLenum stage, const std::string& source, const std::string& label);
     GLuint linkProgram(const std::vector<GLuint>& shaders, const std::string& label);
     void releaseResources();
+#if defined(TRACE_WITH_OIDN)
+    bool initializeOidn();
+    void shutdownOidn();
+    bool captureOidnInput();
+    void uploadOidnResultIfReady();
+    void enqueueOidnJob();
+    void oidnWorkerMain();
+#endif
 
 private:
     int m_width = 1280;
@@ -105,6 +123,41 @@ private:
     QElapsedTimer m_sceneIdleTimer;
     qint64 m_lastChangeMs = 0;
     int m_effectiveSppPerFrame = 1;
+    bool m_hasDenoisedFrame = false;
+    uint64_t m_resetSerial = 0;
+#if defined(TRACE_WITH_OIDN)
+    struct OidnJob {
+        int width = 0;
+        int height = 0;
+        uint64_t resetSerial = 0;
+        std::vector<float> color;
+        std::vector<float> normal;
+        std::vector<float> albedo;
+    };
+
+    struct OidnResult {
+        int width = 0;
+        int height = 0;
+        uint64_t resetSerial = 0;
+        std::vector<float> color;
+    };
+
+    oidn::DeviceRef m_oidnDevice;
+    std::thread m_oidnWorker;
+    std::mutex m_oidnMutex;
+    std::condition_variable m_oidnCv;
+    bool m_oidnExitRequested = false;
+    bool m_oidnJobPending = false;
+    bool m_oidnJobInFlight = false;
+    bool m_oidnResultReady = false;
+    OidnJob m_oidnPendingJob;
+    OidnResult m_oidnResult;
+    std::vector<float> m_oidnColorReadback;
+    std::vector<float> m_oidnNormalReadback;
+    std::vector<float> m_oidnAlbedoReadback;
+    std::vector<float> m_oidnUploadRgba;
+    qint64 m_lastOidnKickMs = 0;
+#endif
 };
 
 } // namespace trace
