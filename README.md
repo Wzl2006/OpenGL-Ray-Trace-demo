@@ -100,6 +100,18 @@ EffectiveSPP = 1
 
 This prevents machine lockups when target SPP is high.
 
+## Sampling Architecture (Current)
+
+- Primary pixel jitter keeps the existing Hammersley pattern.
+- Path dimensions (BSDF branch, GGX/hemisphere sampling, wavelength pick, RR) now use a Sobol-style low-discrepancy stream with fixed per-bounce dimension slots.
+- Area-light NEE sampling now uses per-pixel independent Hammersley UV generation (no workgroup-shared light sample table).
+
+## Sampling Roadmap (Later)
+
+- Optional deterministic RR cutoff mode based on path contribution threshold.
+- Deterministic Cranley-Patterson shift construction (remove random-style shifts).
+- High-dimension sequence correlation/period validation and diagnostics.
+
 ## Project Layout
 
 ```text

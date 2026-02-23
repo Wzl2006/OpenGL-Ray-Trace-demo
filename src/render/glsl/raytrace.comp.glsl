@@ -70,19 +70,24 @@ layout(binding = 2, rgba32f) uniform image2D uBeautyImage;
 layout(binding = 3, rgba32f) uniform image2D uNormalImage;
 layout(binding = 4, rgba32f) uniform image2D uAlbedoImage;
 
-shared vec2 sLightUv[32];
+struct PathLdsSampler {
+    uint pixelSeed;
+    uint sampleIndex;
+    uint frameIndex;
+};
 
-uint rng_state;
+const uint kDimsPerBounce = 12u;
+const uint kDimBranch = 0u;
+const uint kDimWavelength = 1u;
+const uint kDimGgxReflect = 2u;
+const uint kDimGgxRefract = 4u;
+const uint kDimDiffuse = 6u;
+const uint kDimLowProbRr = 8u;
+const uint kDimThroughputRr = 9u;
+const uint kDimLightScramble = 10u;
 
-uint rand_pcg() {
-    uint state = rng_state;
-    rng_state = rng_state * 747796405u + 2891336453u;
-    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-    return (word >> 22u) ^ word;
-}
-
-float randf() {
-    return float(rand_pcg()) / 4294967295.0;
+uint bounceDimBase(int bounce) {
+    return uint(max(bounce, 0)) * kDimsPerBounce;
 }
 
 uint hash32(uint x) {
@@ -107,6 +112,23 @@ vec2 hammersley2D(uint i, uint n, uint scramble) {
     float u = (float(i) + 0.5) / max(float(n), 1.0);
     float v = radicalInverseVdC(i ^ scramble);
     return vec2(u, v);
+}
+
+uint ldsScramble(PathLdsSampler sampler, uint dim) {
+    uint h = sampler.pixelSeed;
+    h ^= hash32((sampler.frameIndex + 1u) * 0x9e3779b9u);
+    h ^= hash32((dim + 1u) * 0x85ebca6bu);
+    return hash32(h);
+}
+
+float lds1D(PathLdsSampler sampler, uint dim) {
+    uint index = sampler.sampleIndex;
+    uint scramble = ldsScramble(sampler, dim);
+    return radicalInverseVdC(index ^ scramble);
+}
+
+vec2 lds2D(PathLdsSampler sampler, uint dim0) {
+    return vec2(lds1D(sampler, dim0), lds1D(sampler, dim0 + 1u));
 }
 
 float saturate(float x) {
@@ -213,9 +235,9 @@ vec3 basisTangent(vec3 n) {
     return normalize(cross(up, n));
 }
 
-vec3 sampleHemisphere(vec3 n) {
-    float u1 = randf();
-    float u2 = randf();
+vec3 sampleHemisphere(vec3 n, vec2 xi) {
+    float u1 = xi.x;
+    float u2 = xi.y;
     float r = sqrt(u1);
     float phi = 6.28318530718 * u2;
     float x = r * cos(phi);
@@ -226,10 +248,10 @@ vec3 sampleHemisphere(vec3 n) {
     return normalize(t * x + b * y + n * z);
 }
 
-vec3 sampleGGXNormal(vec3 n, float roughness) {
+vec3 sampleGGXNormal(vec3 n, float roughness, vec2 xi) {
     float a = max(roughness * roughness, 0.001);
-    float u1 = randf();
-    float u2 = randf();
+    float u1 = xi.x;
+    float u2 = xi.y;
     float phi = 6.28318530718 * u1;
     float cosTheta = sqrt((1.0 - u2) / (1.0 + (a * a - 1.0) * u2));
     float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
@@ -451,7 +473,9 @@ vec3 sampleDirectLightNEE(in Hit hit,
                           float diffuseWeight,
                           float specularWeight,
                           float roughness,
-                          float f0) {
+                          float f0,
+                          PathLdsSampler sampler,
+                          int bounce) {
     if (diffuseWeight <= 1e-5 && specularWeight <= 1e-5) {
         return vec3(0.0);
     }
@@ -466,11 +490,12 @@ vec3 sampleDirectLightNEE(in Hit hit,
 
     vec3 result = vec3(0.0);
     vec3 diffuseBrdf = material.albedoRoughness.rgb * diffuseWeight * (1.0 / kPi);
-    vec2 shift = vec2(randf(), randf());
+    uint dimBase = bounceDimBase(bounce);
+    uint scramble = hash32(ldsScramble(sampler, dimBase + kDimLightScramble));
 
     for (int i = 0; i < sampleCount; ++i) {
-        // Use low-discrepancy base samples with one Cranley-Patterson shift per path.
-        vec2 uv = fract(sLightUv[i] + shift);
+        // Per-pixel low-discrepancy light samples to avoid shared-workgroup correlations.
+        vec2 uv = hammersley2D(uint(i), uint(sampleCount), scramble);
         vec3 lightPos = lightCenter + vec3((uv.x - 0.5) * sizeX, 0.0, (uv.y - 0.5) * sizeY);
         vec3 toLight = lightPos - hit.position;
         float dist2 = dot(toLight, toLight);
@@ -504,7 +529,7 @@ vec3 sampleDirectLightNEE(in Hit hit,
     return result / float(sampleCount);
 }
 
-PathResult tracePath(Ray ray) {
+PathResult tracePath(Ray ray, PathLdsSampler sampler) {
     PathResult outResult;
     outResult.radiance = vec3(0.0);
     outResult.primaryNormal = vec3(0.0, 1.0, 0.0);
@@ -577,9 +602,10 @@ PathResult tracePath(Ray ray) {
         float directSpecularW = fresnel;
         vec3 viewDir = normalize(-ray.dir);
         outResult.radiance += throughput * sampleDirectLightNEE(
-            hit, material, viewDir, diffuseW, directSpecularW, roughness, f0);
+            hit, material, viewDir, diffuseW, directSpecularW, roughness, f0, sampler, bounce);
 
-        float branch = randf();
+        uint dimBase = bounceDimBase(bounce);
+        float branch = lds1D(sampler, dimBase + kDimBranch);
         vec3 nextDir = vec3(0.0);
         vec3 branchWeight = vec3(1.0);
         float branchProb = 1.0;
@@ -592,7 +618,8 @@ PathResult tracePath(Ray ray) {
         float refractRoughness = clamp(roughness * 0.6, 0.0, 0.8);
 
         if (branch < refractW) {
-            float lambda = debugMono ? debugLambdaNm : wavelengthNm(min(int(floor(randf() * float(clamp(int(uParams.cauchy.z), 1, 6)))), 5));
+            float lambdaPick = lds1D(sampler, dimBase + kDimWavelength);
+            float lambda = debugMono ? debugLambdaNm : wavelengthNm(min(int(floor(lambdaPick * float(clamp(int(uParams.cauchy.z), 1, 6)))), 5));
             float lambdaUm = lambda * 0.001;
             float iorDispersion = uParams.cauchy.x + uParams.cauchy.y / (lambdaUm * lambdaUm);
 
@@ -603,7 +630,7 @@ PathResult tracePath(Ray ray) {
                 if (roughness <= kSmoothSpecThreshold) {
                     nextDir = normalize(reflect(ray.dir, n));
                 } else {
-                    vec3 microN = sampleGGXNormal(n, roughness);
+                    vec3 microN = sampleGGXNormal(n, roughness, lds2D(sampler, dimBase + kDimGgxRefract));
                     nextDir = normalize(reflect(ray.dir, microN));
                 }
                 branchProb = max(reflectW + refractW, 1e-4);
@@ -612,7 +639,7 @@ PathResult tracePath(Ray ray) {
                 if (roughness <= kSmoothSpecThreshold) {
                     nextDir = normalize(refrDir);
                 } else {
-                    vec3 microN = sampleGGXNormal(n, refractRoughness);
+                    vec3 microN = sampleGGXNormal(n, refractRoughness, lds2D(sampler, dimBase + kDimGgxRefract));
                     vec3 roughRefrDir = refract(ray.dir, microN, eta);
                     if (length(roughRefrDir) < 1e-5) {
                         roughRefrDir = refrDir;
@@ -634,7 +661,7 @@ PathResult tracePath(Ray ray) {
             if (roughness <= kSmoothSpecThreshold) {
                 nextDir = normalize(reflect(ray.dir, hit.shadingNormal));
             } else {
-                vec3 microN = sampleGGXNormal(hit.shadingNormal, roughness);
+                vec3 microN = sampleGGXNormal(hit.shadingNormal, roughness, lds2D(sampler, dimBase + kDimGgxReflect));
                 nextDir = normalize(reflect(ray.dir, microN));
             }
             branchWeight = mix(material.albedoRoughness.rgb, vec3(1.0), 0.75);
@@ -645,7 +672,7 @@ PathResult tracePath(Ray ray) {
             nextSamplePosition = vec3(0.0);
             nextBsdfPdf = 0.0;
         } else {
-            nextDir = sampleHemisphere(hit.shadingNormal);
+            nextDir = sampleHemisphere(hit.shadingNormal, lds2D(sampler, dimBase + kDimDiffuse));
             branchWeight = material.albedoRoughness.rgb;
             branchProb = max(diffuseW, 1e-4);
             nextHasBsdfSample = true;
@@ -657,7 +684,7 @@ PathResult tracePath(Ray ray) {
         const float kLowProbRRThreshold = 0.05;
         if (branchProb < kLowProbRRThreshold) {
             float survive = branchProb / kLowProbRRThreshold;
-            if (randf() > survive) {
+            if (lds1D(sampler, dimBase + kDimLowProbRr) > survive) {
                 break;
             }
             branchProb = kLowProbRRThreshold;
@@ -675,7 +702,7 @@ PathResult tracePath(Ray ray) {
 
         if (bounce >= 2) {
             float survive = clamp(max3(throughput), 0.05, 0.95);
-            if (randf() > survive) {
+            if (lds1D(sampler, dimBase + kDimThroughputRr) > survive) {
                 break;
             }
             throughput /= survive;
@@ -695,16 +722,6 @@ void main() {
         return;
     }
 
-    int lightSamples = clamp(uParams.options.y, 1, 32);
-    if (int(gl_LocalInvocationIndex) < lightSamples) {
-        uvec3 group = gl_WorkGroupID;
-        uint frame = uint(uCamera.viewportAndFrame.z);
-        uint li = gl_LocalInvocationIndex;
-        uint seed = group.x * 73856093u ^ group.y * 19349663u ^ frame * 83492791u ^ li * 2654435761u;
-        sLightUv[li] = hammersley2D(li, uint(lightSamples), hash32(seed));
-    }
-    barrier();
-
     vec3 currentColor = vec3(0.0);
     vec3 normalAccum = vec3(0.0);
     vec3 albedoAccum = vec3(0.0);
@@ -723,8 +740,6 @@ void main() {
                            float(hash32(pixelSeed ^ 0x02e5be93u)) / 4294967295.0);
     uint sppU = uint(spp);
     for (int sampleIndex = 0; sampleIndex < spp; ++sampleIndex) {
-        rng_state = uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + frame * 26699u + uint(sampleIndex) * 104729u + 97u;
-
         vec2 jitter = fract(hammersley2D(uint(sampleIndex), sppU, pixelSeed) + pixelShift);
         vec2 uv = (vec2(pixel) + jitter) / vec2(float(imageSizePx.x), float(imageSizePx.y));
         vec2 ndc = uv * 2.0 - 1.0;
@@ -738,7 +753,12 @@ void main() {
         primaryRay.origin = uCamera.cameraPosition.xyz;
         primaryRay.dir = normalize(world.xyz - primaryRay.origin);
 
-        PathResult sampleResult = tracePath(primaryRay);
+        PathLdsSampler ldsSampler;
+        ldsSampler.pixelSeed = pixelSeed;
+        ldsSampler.sampleIndex = uint(sampleIndex);
+        ldsSampler.frameIndex = frame;
+
+        PathResult sampleResult = tracePath(primaryRay, ldsSampler);
         vec3 sampleRadiance = sampleResult.radiance;
 
         // Robust/adaptive firefly clamp using running luminance statistics.

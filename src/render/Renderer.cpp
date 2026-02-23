@@ -118,6 +118,29 @@ void Renderer::renderFrame() {
         return;
     }
 
+    auto drawOutput = [this]() {
+        glViewport(0, 0, m_width, m_height);
+        glUseProgram(m_displayProgram);
+        glBindVertexArray(m_fullscreenVao);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_outputTexture);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, m_denoisedTexture);
+        const bool showDenoised = (m_params.denoiseEnabled != 0) &&
+                                  (m_hasDenoisedFrame || m_denoiserBackend == DenoiserBackend::BuiltinCompute);
+        const GLint rawLocation = glGetUniformLocation(m_displayProgram, "uRawTexture");
+        const GLint denoisedLocation = glGetUniformLocation(m_displayProgram, "uDenoisedTexture");
+        const GLint useDenoisedLocation = glGetUniformLocation(m_displayProgram, "uUseDenoised");
+        const GLint denoiseBlendLocation = glGetUniformLocation(m_displayProgram, "uDenoiseBlend");
+        glUniform1i(rawLocation, 0);
+        glUniform1i(denoisedLocation, 1);
+        glUniform1i(useDenoisedLocation, showDenoised ? 1 : 0);
+        glUniform1f(denoiseBlendLocation, std::clamp(m_params.denoiseBlend, 0.0f, 1.0f));
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glActiveTexture(GL_TEXTURE0);
+        glBindVertexArray(0);
+    };
+
     auto pollGpuTimeQuery = [this]() {
         const GLuint readQuery = m_timeQueries[static_cast<size_t>(m_queryReadIndex)];
         GLuint queryAvailable = 0;
@@ -141,8 +164,14 @@ void Renderer::renderFrame() {
 
     pollGpuTimeQuery();
     if (m_computeInFlight) {
+#if defined(TRACE_WITH_OIDN)
+        if (m_params.denoiseEnabled != 0 && m_denoiserBackend == DenoiserBackend::OidnCpu) {
+            uploadOidnResultIfReady();
+        }
+#endif
         m_stats.bvhRebuildPending = m_bvhRebuildPending;
         m_stats.accumulatedFrameCount = m_frameSinceReset;
+        drawOutput();
         return;
     }
 
@@ -212,26 +241,7 @@ void Renderer::renderFrame() {
     m_computeFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     m_computeInFlight = (m_computeFence != nullptr);
 
-    glViewport(0, 0, m_width, m_height);
-    glUseProgram(m_displayProgram);
-    glBindVertexArray(m_fullscreenVao);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_outputTexture);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, m_denoisedTexture);
-    const bool showDenoised = (m_params.denoiseEnabled != 0) &&
-                              (m_hasDenoisedFrame || m_denoiserBackend == DenoiserBackend::BuiltinCompute);
-    const GLint rawLocation = glGetUniformLocation(m_displayProgram, "uRawTexture");
-    const GLint denoisedLocation = glGetUniformLocation(m_displayProgram, "uDenoisedTexture");
-    const GLint useDenoisedLocation = glGetUniformLocation(m_displayProgram, "uUseDenoised");
-    const GLint denoiseBlendLocation = glGetUniformLocation(m_displayProgram, "uDenoiseBlend");
-    glUniform1i(rawLocation, 0);
-    glUniform1i(denoisedLocation, 1);
-    glUniform1i(useDenoisedLocation, showDenoised ? 1 : 0);
-    glUniform1f(denoiseBlendLocation, std::clamp(m_params.denoiseBlend, 0.0f, 1.0f));
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-    glActiveTexture(GL_TEXTURE0);
-    glBindVertexArray(0);
+    drawOutput();
 
     m_pendingDirty = SceneDirtyFlags::None;
     m_forceResetThisFrame = false;
