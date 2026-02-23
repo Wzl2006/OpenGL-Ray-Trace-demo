@@ -75,7 +75,13 @@ The UI denoise toggle is wired to rendering logic:
 - If **on**:
   - OIDN denoise jobs run on CPU worker thread after scene settles,
   - `beauty/output + normal + albedo` are captured from the same frame snapshot,
-  - display uses `denoisedTexture`.
+  - display uses `mix(raw, denoised, denoiseBlend)` (default `0.85`).
+
+Current default OIDN scheduling parameters:
+
+- `minAccumFrames = 16`
+- `denoiseIntervalMs = 200`
+- `denoiseBlend = 0.85`
 
 ## Delayed Rendering Behavior
 

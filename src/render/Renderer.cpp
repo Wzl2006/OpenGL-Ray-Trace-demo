@@ -25,7 +25,6 @@ constexpr int kSphereCount = 3;
 constexpr float kCauchyA = 1.5f;
 constexpr float kCauchyB = 0.004f;
 constexpr int kDispersionBands = 6;
-constexpr int kOidnKickIntervalMs = 120;
 
 } // namespace
 
@@ -193,12 +192,21 @@ void Renderer::renderFrame() {
     glUseProgram(m_displayProgram);
     glBindVertexArray(m_fullscreenVao);
     glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_outputTexture);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, m_denoisedTexture);
     const bool showDenoised = (m_params.denoiseEnabled != 0) &&
                               (m_hasDenoisedFrame || m_denoiserBackend == DenoiserBackend::BuiltinCompute);
-    glBindTexture(GL_TEXTURE_2D, showDenoised ? m_denoisedTexture : m_outputTexture);
-    const GLint outputLocation = glGetUniformLocation(m_displayProgram, "uOutputTexture");
-    glUniform1i(outputLocation, 0);
+    const GLint rawLocation = glGetUniformLocation(m_displayProgram, "uRawTexture");
+    const GLint denoisedLocation = glGetUniformLocation(m_displayProgram, "uDenoisedTexture");
+    const GLint useDenoisedLocation = glGetUniformLocation(m_displayProgram, "uUseDenoised");
+    const GLint denoiseBlendLocation = glGetUniformLocation(m_displayProgram, "uDenoiseBlend");
+    glUniform1i(rawLocation, 0);
+    glUniform1i(denoisedLocation, 1);
+    glUniform1i(useDenoisedLocation, showDenoised ? 1 : 0);
+    glUniform1f(denoiseBlendLocation, std::clamp(m_params.denoiseBlend, 0.0f, 1.0f));
     glDrawArrays(GL_TRIANGLES, 0, 3);
+    glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(0);
 
     m_pendingDirty = SceneDirtyFlags::None;
@@ -509,12 +517,14 @@ void Renderer::runDenoiserIfEnabled() {
 #if defined(TRACE_WITH_OIDN)
         uploadOidnResultIfReady();
 
-        if (m_stats.isDynamic || m_frameSinceReset < 2u || !m_sceneIdleTimer.isValid()) {
+        const uint64_t minAccumFrames = static_cast<uint64_t>(std::max(1, m_params.denoiseMinAccumFrames));
+        if (m_stats.isDynamic || m_frameSinceReset < minAccumFrames || !m_sceneIdleTimer.isValid()) {
             return;
         }
 
         const qint64 nowMs = m_sceneIdleTimer.elapsed();
-        if ((nowMs - m_lastOidnKickMs) < kOidnKickIntervalMs) {
+        const qint64 minIntervalMs = static_cast<qint64>(std::max(50, m_params.denoiseIntervalMs));
+        if ((nowMs - m_lastOidnKickMs) < minIntervalMs) {
             return;
         }
 

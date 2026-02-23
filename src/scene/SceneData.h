@@ -57,6 +57,9 @@ struct RenderParams {
     int settleDelayMs = 250;
     int denoiseEnabled = 1;
     float denoiseSigma = 0.12f;
+    int denoiseMinAccumFrames = 16;
+    int denoiseIntervalMs = 200;
+    float denoiseBlend = 0.85f;
     int debugMonochromaticMode = 0;
     float debugWavelengthNm = 550.0f;
 };
