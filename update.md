@@ -25,8 +25,12 @@
 - 增加 GPU in-flight 保护（Fence），限制同一时刻只提交一个重计算帧，防止高 SPP 下整机卡死。
 - 后续在 0.2.3 中进一步修正了在途帧显示路径（避免花屏）。
 
-## alpha 0.2.3（当前）
+## alpha 0.2.3
 - 将路径维度随机源全面替换为低差异序列（Sobol 风格）：
   - 分支选择、GGX/半球采样、波长选择、RR 全部改为固定维度槽位采样。
 - 光源采样改为“每像素独立低差异采样”，移除 workgroup 共享光源采样点带来的相关性。
 - 保持主像素 Hammersley 不变，更新 README 的采样架构与后续路线说明。
+
+## alpha 0.2.4（当前）
+Remove "Denosie Sigma" setting(Deprecated) and delete "sceneChanged" signal(Deprecated)
+Remove some external dependencies
