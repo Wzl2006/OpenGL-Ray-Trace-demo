@@ -34,3 +34,7 @@
 ## alpha 0.2.4（当前）
 Remove "Denosie Sigma" setting(Deprecated) and delete "sceneChanged" signal(Deprecated)
 Remove some external dependencies
+## alpha 0.2.5
+- Added internal supersampling presets: 1.0x / 1.25x / 1.5x.
+- Full render pipeline now runs at internal resolution, then downsampled to display using GPU texture filtering.
+- Keep `QOpenGLWidget` render path (single-thread presentation path).

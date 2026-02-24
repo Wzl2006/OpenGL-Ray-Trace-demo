@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstring>
-#include <limits>
 #include <string>
 #include <vector>
 
@@ -12,7 +10,6 @@
 #include <QDebug>
 #include <QDir>
 #include <QFile>
-#include <QFileInfo>
 
 #include <glm/ext/matrix_transform.hpp>
 
@@ -87,6 +84,11 @@ void Renderer::resize(int width, int height) {
     m_forceResetThisFrame = true;
 }
 
+void Renderer::setPresentSize(int width, int height) {
+    m_presentWidth = std::max(width, 1);
+    m_presentHeight = std::max(height, 1);
+}
+
 void Renderer::shutdown() {
     if (!m_initialized) {
         return;
@@ -120,7 +122,7 @@ void Renderer::renderFrame() {
     }
 
     auto drawOutput = [this]() {
-        glViewport(0, 0, m_width, m_height);
+        glViewport(0, 0, m_presentWidth, m_presentHeight);
         glUseProgram(m_displayProgram);
         glBindVertexArray(m_fullscreenVao);
         glActiveTexture(GL_TEXTURE0);
@@ -383,8 +385,8 @@ bool Renderer::createTextures() {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, m_width, m_height, 0, GL_RGBA, GL_FLOAT, nullptr);
 
     glBindTexture(GL_TEXTURE_2D, m_outputTexture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, m_width, m_height, 0, GL_RGBA, GL_FLOAT, nullptr);
@@ -411,8 +413,8 @@ bool Renderer::createTextures() {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, m_width, m_height, 0, GL_RGBA, GL_FLOAT, nullptr);
 
     glBindTexture(GL_TEXTURE_2D, m_denoisedTexture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, m_width, m_height, 0, GL_RGBA, GL_FLOAT, nullptr);

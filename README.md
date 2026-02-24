@@ -16,6 +16,7 @@ Realtime Cornell Box path tracing demo built with OpenGL 4.3 Compute Shader, Qt6
 - Delayed high-quality rendering to avoid lockups at high SPP:
   - immediate low-SPP preview after edits,
   - then automatic recovery to higher quality.
+- Internal supersampling presets (`1.00x / 1.25x / 1.50x`) with GPU texture-filter downsample to display resolution.
 - Debug monochromatic mode for chroma-noise analysis:
   - fixed wavelength (default 550nm),
   - dispersion and absorption disabled.
@@ -51,6 +52,7 @@ Output:
 - `SPP / Frame` (`1..2048`, supports `>1000`)
 - `SPP Budget` (`1..256`, hard cap for per-frame work)
 - `Settle Delay` (`0..2000 ms`)
+- `Internal Scale` (`1.00x / 1.25x / 1.50x`)
 - `Enable Denoise`
 - `Debug Monochromatic (550nm)`
 
@@ -133,7 +135,7 @@ src/
 
 ## Known Limits
 
-- UI and rendering run on the same thread.
+- High internal scale increases shading cost and texture bandwidth pressure.
 - OIDN input still requires texture readback from OpenGL, so denoise cadence is throttled.
 - If OIDN is not found at configure time, renderer falls back to built-in compute denoiser.
 - No HDR output pipeline.

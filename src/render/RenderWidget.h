@@ -28,6 +28,7 @@ public:
     void setSppBudgetPerFrame(int sppBudget);
     void setSettleDelayMs(int delayMs);
     void setDenoiseEnabled(bool enabled);
+    void setInternalScale(float scale);
     void setDebugMonochromaticMode(bool enabled);
 
     void setLightColor(const QColor& color);
@@ -51,6 +52,7 @@ protected:
 
 private:
     void markDirty(SceneDirtyFlags flags);
+    void resizeRendererToInternalResolution(int displayWidth, int displayHeight);
     MaterialDefinition& sphereMaterial(int sphereIndex);
 
 private:
@@ -58,7 +60,8 @@ private:
     SceneData m_scene;
     RenderParams m_renderParams;
     SceneDirtyFlags m_dirtyFlags = SceneDirtyFlags::All;
-
+    int m_renderWidth = 0;
+    int m_renderHeight = 0;
     QPoint m_lastMousePos;
 };
 

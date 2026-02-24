@@ -3,9 +3,6 @@
 #include <algorithm>
 #include <cmath>
 
-#include <QColor>
-#include <QTimer>
-
 namespace trace {
 
 namespace {
@@ -71,6 +68,11 @@ void RenderWidget::setDenoiseEnabled(bool enabled) {
     markDirty(SceneDirtyFlags::RenderParamChanged);
 }
 
+void RenderWidget::setInternalScale(float scale) {
+    m_renderParams.internalScale = std::clamp(scale, 1.0f, 1.5f);
+    markDirty(SceneDirtyFlags::RenderParamChanged);
+}
+
 void RenderWidget::setDebugMonochromaticMode(bool enabled) {
     m_renderParams.debugMonochromaticMode = enabled ? 1 : 0;
     markDirty(SceneDirtyFlags::RenderParamChanged);
@@ -129,17 +131,16 @@ void RenderWidget::setSphereDiffuseEnabled(int sphereIndex, bool enabled) {
 void RenderWidget::initializeGL() {
     m_renderer.initialize();
     m_renderer.applyChanges(m_scene, m_renderParams, SceneDirtyFlags::All);
+    resizeRendererToInternalResolution(width(), height());
 }
 
 void RenderWidget::resizeGL(int w, int h) {
-    const qreal dpr = devicePixelRatioF();
-    const int fbWidth = std::max(1, static_cast<int>(std::lround(static_cast<double>(w) * dpr)));
-    const int fbHeight = std::max(1, static_cast<int>(std::lround(static_cast<double>(h) * dpr)));
-    m_renderer.resize(fbWidth, fbHeight);
+    resizeRendererToInternalResolution(w, h);
     markDirty(SceneDirtyFlags::CameraChanged);
 }
 
 void RenderWidget::paintGL() {
+    resizeRendererToInternalResolution(width(), height());
     m_renderer.applyChanges(m_scene, m_renderParams, m_dirtyFlags);
     m_dirtyFlags = SceneDirtyFlags::None;
     m_renderer.renderFrame();
@@ -180,6 +181,25 @@ void RenderWidget::wheelEvent(QWheelEvent* event) {
 void RenderWidget::markDirty(SceneDirtyFlags flags) {
     m_dirtyFlags |= flags;
     update();
+}
+
+void RenderWidget::resizeRendererToInternalResolution(int displayWidth, int displayHeight) {
+    const qreal dpr = devicePixelRatioF();
+    const int fbWidth = std::max(1, static_cast<int>(std::lround(static_cast<double>(displayWidth) * dpr)));
+    const int fbHeight = std::max(1, static_cast<int>(std::lround(static_cast<double>(displayHeight) * dpr)));
+    m_renderer.setPresentSize(fbWidth, fbHeight);
+
+    const float scale = std::clamp(m_renderParams.internalScale, 1.0f, 1.5f);
+    const int targetW = std::max(1, static_cast<int>(std::lround(static_cast<double>(fbWidth) * static_cast<double>(scale))));
+    const int targetH = std::max(1, static_cast<int>(std::lround(static_cast<double>(fbHeight) * static_cast<double>(scale))));
+
+    if (targetW == m_renderWidth && targetH == m_renderHeight) {
+        return;
+    }
+
+    m_renderWidth = targetW;
+    m_renderHeight = targetH;
+    m_renderer.resize(m_renderWidth, m_renderHeight);
 }
 
 MaterialDefinition& RenderWidget::sphereMaterial(int sphereIndex) {

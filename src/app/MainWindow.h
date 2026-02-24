@@ -13,6 +13,7 @@ class QSlider;
 class QPushButton;
 class QTimer;
 class QCheckBox;
+class QComboBox;
 QT_END_NAMESPACE
 
 namespace trace {
@@ -71,6 +72,7 @@ private:
     QLabel* m_settleDelayValueLabel = nullptr;
     QCheckBox* m_denoiseEnabledCheck = nullptr;
     QCheckBox* m_debugMonochromaticCheck = nullptr;
+    QComboBox* m_internalScaleCombo = nullptr;
 
     QPushButton* m_lightColorButton = nullptr;
 

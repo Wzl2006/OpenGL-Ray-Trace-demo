@@ -4,6 +4,7 @@
 
 #include <QColorDialog>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -167,6 +168,25 @@ QWidget* MainWindow::createRenderSettingsPage() {
         }
     });
     layout->addRow(tr("Settle Delay"), delayRowWidget);
+
+    m_internalScaleCombo = new QComboBox(page);
+    m_internalScaleCombo->addItem(tr("1.00x (720x720)"), 1.0);
+    m_internalScaleCombo->addItem(tr("1.25x (900x900)"), 1.25);
+    m_internalScaleCombo->addItem(tr("1.50x (1080x1080)"), 1.5);
+    const double currentScale = static_cast<double>(m_renderWidget->renderParams().internalScale);
+    int currentScaleIndex = m_internalScaleCombo->findData(currentScale);
+    if (currentScaleIndex < 0) {
+        currentScaleIndex = 0;
+    }
+    m_internalScaleCombo->setCurrentIndex(currentScaleIndex);
+    connect(m_internalScaleCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
+        if (m_internalScaleCombo == nullptr || index < 0) {
+            return;
+        }
+        const double scale = m_internalScaleCombo->itemData(index).toDouble();
+        m_renderWidget->setInternalScale(static_cast<float>(scale));
+    });
+    layout->addRow(tr("Internal Scale"), m_internalScaleCombo);
 
     m_denoiseEnabledCheck = new QCheckBox(tr("Enable Denoise"), page);
     m_denoiseEnabledCheck->setChecked(m_renderWidget->renderParams().denoiseEnabled != 0);

@@ -59,6 +59,7 @@ struct RenderParams {
     int denoiseMinAccumFrames = 16;
     int denoiseIntervalMs = 200;
     float denoiseBlend = 0.85f;
+    float internalScale = 1.0f;
     int debugMonochromaticMode = 0;
     float debugWavelengthNm = 550.0f;
 };

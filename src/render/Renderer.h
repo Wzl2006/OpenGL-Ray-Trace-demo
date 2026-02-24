@@ -44,6 +44,7 @@ public:
     void initialize();
     void shutdown();
     void resize(int width, int height);
+    void setPresentSize(int width, int height);
     void applyChanges(const SceneData& scene, const RenderParams& params, SceneDirtyFlags dirtyFlags);
     void renderFrame();
 
@@ -78,6 +79,8 @@ private:
 private:
     int m_width = 1280;
     int m_height = 720;
+    int m_presentWidth = 1280;
+    int m_presentHeight = 720;
     bool m_initialized = false;
 
     SceneData m_scene;
