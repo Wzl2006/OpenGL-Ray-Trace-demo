@@ -5,3 +5,5 @@ build/
 *.pdb
 *.ilk
 *.vcxproj.user
+PLAN*.md
+TASK*.md
