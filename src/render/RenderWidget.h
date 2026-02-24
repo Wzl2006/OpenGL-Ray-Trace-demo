@@ -1,6 +1,5 @@
 #pragma once
 
-#include <QElapsedTimer>
 #include <QColor>
 #include <QMouseEvent>
 #include <QOpenGLWidget>
@@ -29,7 +28,6 @@ public:
     void setSppBudgetPerFrame(int sppBudget);
     void setSettleDelayMs(int delayMs);
     void setDenoiseEnabled(bool enabled);
-    void setDenoiseSigma(float sigma);
     void setDebugMonochromaticMode(bool enabled);
 
     void setLightColor(const QColor& color);
@@ -41,9 +39,6 @@ public:
     void setSphereIor(int sphereIndex, float ior);
     void setSphereTransmission(int sphereIndex, float transmission);
     void setSphereDiffuseEnabled(int sphereIndex, bool enabled);
-
-signals:
-    void sceneChanged();
 
 protected:
     void initializeGL() override;

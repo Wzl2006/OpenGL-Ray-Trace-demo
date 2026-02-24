@@ -71,11 +71,6 @@ void RenderWidget::setDenoiseEnabled(bool enabled) {
     markDirty(SceneDirtyFlags::RenderParamChanged);
 }
 
-void RenderWidget::setDenoiseSigma(float sigma) {
-    m_renderParams.denoiseSigma = std::clamp(sigma, 0.01f, 0.5f);
-    markDirty(SceneDirtyFlags::RenderParamChanged);
-}
-
 void RenderWidget::setDebugMonochromaticMode(bool enabled) {
     m_renderParams.debugMonochromaticMode = enabled ? 1 : 0;
     markDirty(SceneDirtyFlags::RenderParamChanged);
@@ -184,7 +179,6 @@ void RenderWidget::wheelEvent(QWheelEvent* event) {
 
 void RenderWidget::markDirty(SceneDirtyFlags flags) {
     m_dirtyFlags |= flags;
-    emit sceneChanged();
     update();
 }
 

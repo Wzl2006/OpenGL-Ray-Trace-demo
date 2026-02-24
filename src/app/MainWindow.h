@@ -10,7 +10,6 @@ QT_BEGIN_NAMESPACE
 class QLabel;
 class QDoubleSpinBox;
 class QSlider;
-class QSpinBox;
 class QPushButton;
 class QTimer;
 class QCheckBox;
@@ -66,12 +65,10 @@ private:
     QSlider* m_sppSlider = nullptr;
     QSlider* m_sppBudgetSlider = nullptr;
     QSlider* m_settleDelaySlider = nullptr;
-    QSlider* m_denoiseSigmaSlider = nullptr;
     QSlider* m_lightIntensitySlider = nullptr;
     QLabel* m_sppValueLabel = nullptr;
     QLabel* m_sppBudgetValueLabel = nullptr;
     QLabel* m_settleDelayValueLabel = nullptr;
-    QLabel* m_denoiseSigmaValueLabel = nullptr;
     QCheckBox* m_denoiseEnabledCheck = nullptr;
     QCheckBox* m_debugMonochromaticCheck = nullptr;
 

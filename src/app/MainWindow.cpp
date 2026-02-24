@@ -11,8 +11,6 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSlider>
-#include <QSpinBox>
-#include <QTabWidget>
 #include <QTimer>
 #include <QToolBox>
 #include <QVBoxLayout>
@@ -84,9 +82,9 @@ QWidget* MainWindow::createControlPanel() {
 
     auto* toolbox = new QToolBox(panel);
     toolbox->addItem(createRenderSettingsPage(), tr("渲染设置"));
-    toolbox->addItem(createSpherePage(0, tr("球体 1（镜面）"), false), tr("球体 1"));
-    toolbox->addItem(createSpherePage(1, tr("球体 2（透明）"), false), tr("球体 2"));
-    toolbox->addItem(createSpherePage(2, tr("球体 3（半透明）"), true), tr("球体 3"));
+    toolbox->addItem(createSpherePage(0, tr("球体 1(镜面)"), false), tr("球体 1"));
+    toolbox->addItem(createSpherePage(1, tr("球体 2(透明)"), false), tr("球体 2"));
+    toolbox->addItem(createSpherePage(2, tr("球体 3(半透明)"), true), tr("球体 3"));
     toolbox->addItem(createLightPage(), tr("光源"));
     panelLayout->addWidget(toolbox, 1);
 
@@ -179,23 +177,6 @@ QWidget* MainWindow::createRenderSettingsPage() {
     m_debugMonochromaticCheck->setChecked(m_renderWidget->renderParams().debugMonochromaticMode != 0);
     connect(m_debugMonochromaticCheck, &QCheckBox::toggled, m_renderWidget, &RenderWidget::setDebugMonochromaticMode);
     layout->addRow(m_debugMonochromaticCheck);
-
-    QWidget* sigmaRowWidget = new QWidget(page);
-    auto* sigmaRowLayout = new QHBoxLayout(sigmaRowWidget);
-    sigmaRowLayout->setContentsMargins(0, 0, 0, 0);
-    m_denoiseSigmaSlider = createSlider(1, 50, static_cast<int>(m_renderWidget->renderParams().denoiseSigma * 100.0f));
-    m_denoiseSigmaValueLabel = new QLabel(QString::number(m_renderWidget->renderParams().denoiseSigma, 'f', 2), sigmaRowWidget);
-    m_denoiseSigmaValueLabel->setMinimumWidth(56);
-    sigmaRowLayout->addWidget(m_denoiseSigmaSlider, 1);
-    sigmaRowLayout->addWidget(m_denoiseSigmaValueLabel, 0);
-    connect(m_denoiseSigmaSlider, &QSlider::valueChanged, this, [this](int value) {
-        float sigma = static_cast<float>(value) / 100.0f;
-        m_renderWidget->setDenoiseSigma(sigma);
-        if (m_denoiseSigmaValueLabel != nullptr) {
-            m_denoiseSigmaValueLabel->setText(QString::number(sigma, 'f', 2));
-        }
-    });
-    layout->addRow(tr("Denoise Sigma"), sigmaRowWidget);
 
     QLabel* hint = new QLabel(tr("注：渲染时间统计使用 GPU Timer Query。"), page);
     hint->setWordWrap(true);

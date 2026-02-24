@@ -52,7 +52,6 @@ Output:
 - `SPP Budget` (`1..256`, hard cap for per-frame work)
 - `Settle Delay` (`0..2000 ms`)
 - `Enable Denoise`
-- `Denoise Sigma`
 - `Debug Monochromatic (550nm)`
 
 ### Stats Panel (250ms update)

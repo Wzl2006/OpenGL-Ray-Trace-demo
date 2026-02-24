@@ -25,6 +25,7 @@ constexpr int kSphereCount = 3;
 constexpr float kCauchyA = 1.5f;
 constexpr float kCauchyB = 0.004f;
 constexpr int kDispersionBands = 6;
+constexpr float kBuiltinDenoiseSigma = 0.12f;
 
 } // namespace
 
@@ -601,7 +602,7 @@ void Renderer::runBuiltinDenoiser() {
     const GLint radiusLoc = glGetUniformLocation(m_denoiseProgram, "uRadius");
 
     glUniform2i(sizeLoc, m_width, m_height);
-    glUniform1f(sigmaColorLoc, std::max(0.01f, m_params.denoiseSigma));
+    glUniform1f(sigmaColorLoc, kBuiltinDenoiseSigma);
     glUniform1f(sigmaNormalLoc, 0.15f);
     glUniform1f(sigmaAlbedoLoc, 0.20f);
     glUniform1i(radiusLoc, 2);
